@@ -8,7 +8,7 @@ WORKDIR /app
 COPY . .
 
 # Install dependencies
-RUN pip install --no-cache-dir openenv-core uvicorn requests pydantic
+RUN pip install --no-cache-dir "openenv-core[core]>=0.2.2" uvicorn requests pydantic openai
 
 # Expose port
 EXPOSE 8000

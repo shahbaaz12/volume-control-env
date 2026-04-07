@@ -1,13 +1,33 @@
+import json
 import os
+import re
 import requests
+
+try:
+    from openai import OpenAI
+except ImportError:  # Allows deterministic local fallback if OpenAI is unavailable.
+    OpenAI = None
+
+from tasks.tasks import AvoidSpikesMedium, MaintainComfortEasy, StableListeningHard
 
 # ---------------------------
 # CONFIG (MANDATORY)
 # ---------------------------
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.getenv("API_BASE_URL")
 MODEL_NAME = os.getenv("MODEL_NAME", "rule-based-agent")
-TASKS = ["easy", "medium", "hard"]
+HF_TOKEN = os.getenv("HF_TOKEN")
+ENV_BASE_URL = os.getenv(
+    "ENV_BASE_URL",
+    os.getenv("OPENENV_BASE_URL", os.getenv("SPACE_URL", "http://localhost:8000")),
+).rstrip("/")
+TASKS = [MaintainComfortEasy(), AvoidSpikesMedium(), StableListeningHard()]
 MAX_STEPS = 20
+LLM_TIMEOUT_SECONDS = 5.0
+HTTP = requests.Session()
+if "localhost" in ENV_BASE_URL or "127.0.0.1" in ENV_BASE_URL:
+    HTTP.trust_env = False
+_llm_client = None
+_llm_disabled = False
 
 
 # ---------------------------
@@ -17,9 +37,9 @@ def log_start(task):
     print(f"[START] task={task} env=volume_control_env model={MODEL_NAME}", flush=True)
 
 
-def log_step(step, action, reward, done):
+def log_step(step, action, reward, done, error="null"):
     print(
-        f"[STEP] step={step} action={action} reward={reward:.2f} done={str(done).lower()} error=null",
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={str(done).lower()} error={error}",
         flush=True,
     )
 
@@ -30,6 +50,10 @@ def log_end(success, steps, score, rewards):
         f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
         flush=True,
     )
+
+
+def clean_error(error):
+    return str(error).replace("\n", " ").replace("\r", " ").replace(" ", "_")[:120]
 
 
 # ---------------------------
@@ -51,7 +75,7 @@ def extract_observation(res):
 # ---------------------------
 # SIMPLE AGENT
 # ---------------------------
-def choose_action(observation):
+def rule_based_action(observation):
     volume = observation.get("current_volume", 0.5)
     loudness = observation.get("current_loudness", 0.5)
 
@@ -65,55 +89,73 @@ def choose_action(observation):
         return 0
 
 
+def get_llm_client():
+    global _llm_client, _llm_disabled
+
+    if _llm_disabled or _llm_client is not None:
+        return _llm_client
+
+    if OpenAI is None or not API_BASE_URL or not HF_TOKEN or MODEL_NAME == "rule-based-agent":
+        _llm_disabled = True
+        return None
+
+    _llm_client = OpenAI(
+        base_url=API_BASE_URL,
+        api_key=HF_TOKEN,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+    return _llm_client
+
+
+def parse_action(text):
+    match = re.search(r"-?1|0", text or "")
+    if not match:
+        raise ValueError("No action token found")
+    return max(-1, min(1, int(match.group(0))))
+
+
+def choose_action(observation):
+    global _llm_disabled
+
+    fallback = rule_based_action(observation)
+    client = get_llm_client()
+    if client is None:
+        return fallback
+
+    prompt = (
+        "You control audio volume. Reply with exactly one integer action: "
+        "-1 to lower volume, 0 to keep it, or 1 to raise it. "
+        f"Observation JSON: {json.dumps(observation, sort_keys=True)}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "Return only -1, 0, or 1."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+            max_tokens=4,
+        )
+        return parse_action(response.choices[0].message.content)
+    except Exception:
+        _llm_disabled = True
+        return fallback
+
+
 # ---------------------------
 # TASK SCORING
 # ---------------------------
 def compute_score(task, trajectory):
-    if len(trajectory) == 0:
-        return 0.0
-
-    if task == "easy":
-        good = 0
-        for obs in trajectory:
-            perceived = obs["current_volume"] * obs["current_loudness"]
-            if 0.3 <= perceived <= 0.7:
-                good += 1
-        return good / len(trajectory)
-
-    elif task == "medium":
-        penalty = 0
-        for obs in trajectory:
-            perceived = obs["current_volume"] * obs["current_loudness"]
-            if perceived > 0.8:
-                penalty += 1
-        return max(0.0, 1 - (penalty / len(trajectory)))
-
-    elif task == "hard":
-        score = 0
-        prev_volume = None
-
-        for obs in trajectory:
-            perceived = obs["current_volume"] * obs["current_loudness"]
-
-            if 0.3 <= perceived <= 0.7:
-                score += 0.5
-
-            if prev_volume is not None:
-                if abs(obs["current_volume"] - prev_volume) < 0.2:
-                    score += 0.5
-
-            prev_volume = obs["current_volume"]
-
-        return min(score / len(trajectory), 1.0)
-
-    return 0.0
+    return max(0.0, min(1.0, float(task.grade(trajectory))))
 
 
 # ---------------------------
 # HTTP SAFE CALL
 # ---------------------------
 def safe_post(url, json=None):
-    response = requests.post(url, json=json, timeout=5)
+    response = HTTP.post(url, json=json, timeout=5)
     if response.status_code != 200:
         raise Exception(f"HTTP {response.status_code}")
     return response.json()
@@ -123,7 +165,7 @@ def safe_post(url, json=None):
 # MAIN LOOP
 # ---------------------------
 def run_task(task):
-    log_start(task)
+    log_start(task.name)
 
     rewards = []
     trajectory = []
@@ -131,9 +173,9 @@ def run_task(task):
 
     # Reset
     try:
-        res = safe_post(f"{API_BASE_URL}/reset")
+        res = safe_post(f"{ENV_BASE_URL}/reset")
     except Exception as e:
-        print(f"[ERROR] reset_failed error={str(e)}", flush=True)
+        log_step(0, 0, 0.0, True, f"reset_failed:{clean_error(e)}")
         log_end(False, 0, 0.0, [])
         return
 
@@ -144,10 +186,9 @@ def run_task(task):
         action = {"action": {"change": action_value}}
 
         try:
-            res = safe_post(f"{API_BASE_URL}/step", json=action)
+            res = safe_post(f"{ENV_BASE_URL}/step", json=action)
         except Exception as e:
-            print(f"[ERROR] step_failed error={str(e)}", flush=True)
-            log_step(step, action_value, 0.0, True)
+            log_step(step, action_value, 0.0, True, f"step_failed:{clean_error(e)}")
             break
 
         obs = extract_observation(res)

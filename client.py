@@ -25,23 +25,8 @@ class VolumeControlEnv(
     enabling efficient multi-step interactions with lower latency.
     Each client instance has its own dedicated environment session on the server.
 
-    Example:
-        >>> # Connect to a running server
-        >>> with VolumeControlEnv(base_url="http://localhost:8000") as client:
-        ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
-        ...
-        ...     result = client.step(VolumeControlAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
-
-    Example with Docker:
-        >>> # Automatically start container and connect
-        >>> client = VolumeControlEnv.from_docker_image("volume_control_env-env:latest")
-        >>> try:
-        ...     result = client.reset()
-        ...     result = client.step(VolumeControlAction(message="Test"))
-        ... finally:
-        ...     client.close()
+    This client uses the OpenEnv WebSocket transport, so state is preserved
+    across reset(), step(), and state() calls within the same session.
     """
 
     def _step_payload(self, action: VolumeControlAction) -> Dict:
@@ -54,9 +39,7 @@ class VolumeControlEnv(
         Returns:
             Dictionary representation suitable for JSON encoding
         """
-        return {
-            "message": action.message,
-        }
+        return action.model_dump()
 
     def _parse_result(self, payload: Dict) -> StepResult[VolumeControlObservation]:
         """
@@ -69,17 +52,11 @@ class VolumeControlEnv(
             StepResult with VolumeControlObservation
         """
         obs_data = payload.get("observation", {})
-        observation = VolumeControlObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
-            done=payload.get("done", False),
-            reward=payload.get("reward"),
-            metadata=obs_data.get("metadata", {}),
-        )
+        observation = VolumeControlObservation(**obs_data)
 
         return StepResult(
             observation=observation,
-            reward=payload.get("reward"),
+            reward=payload.get("reward", observation.reward),
             done=payload.get("done", False),
         )
 
@@ -93,7 +70,4 @@ class VolumeControlEnv(
         Returns:
             State object with episode_id and step_count
         """
-        return State(
-            episode_id=payload.get("episode_id"),
-            step_count=payload.get("step_count", 0),
-        )
+        return State(**payload)

@@ -10,7 +10,6 @@ from openenv.core.env_server.http_server import create_app
 from server.volume_control_env_environment import VolumeControlEnvironment
 from models import VolumeControlAction, VolumeControlObservation
 
-# ✅ NO tasks here (your OpenEnv version doesn't support it)
 app = create_app(
     VolumeControlEnvironment,
     VolumeControlAction,
@@ -18,6 +17,12 @@ app = create_app(
     env_name="volume_control_env",
     max_concurrent_envs=1,
 )
+
+
+@app.get("/")
+def root():
+    return {"status": "healthy", "env": "volume_control_env"}
+
 
 def main():
     import uvicorn

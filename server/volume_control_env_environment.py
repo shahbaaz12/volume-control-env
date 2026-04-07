@@ -1,4 +1,5 @@
 from openenv.core.env_server.interfaces import Environment
+from openenv.core.env_server.types import State
 
 try:
     from ..models import VolumeControlAction, VolumeControlObservation
@@ -8,12 +9,19 @@ except ImportError:
 
 class VolumeControlEnvironment(Environment):
     def __init__(self):
+        super().__init__()
+        self.episode_id = None
         self.volume = 0.5
         self.step_count = 0
         self.max_steps = 20
         self.done = False
 
-    def reset(self):
+    def reset(self, seed=None, episode_id=None, **kwargs):
+        if seed is not None:
+            import random
+            random.seed(seed)
+
+        self.episode_id = episode_id
         self.volume = 0.5
         self.step_count = 0
         self.done = False
@@ -25,7 +33,7 @@ class VolumeControlEnvironment(Environment):
             done=False
         )
 
-    def step(self, action: VolumeControlAction):
+    def step(self, action: VolumeControlAction, timeout_s=None, **kwargs):
         if self.done:
             return self.reset()
 
@@ -50,11 +58,14 @@ class VolumeControlEnvironment(Environment):
             done=self.done
         )
 
+    @property
     def state(self):
-        return {
-            "volume": self.volume,
-            "step_count": self.step_count
-        }
+        return State(
+            episode_id=self.episode_id,
+            step_count=self.step_count,
+            volume=self.volume,
+            done=self.done,
+        )
 
     def _get_loudness(self):
         import random
@@ -64,6 +75,6 @@ class VolumeControlEnvironment(Environment):
         if 0.3 <= perceived <= 0.7:
             return 1.0
         elif perceived > 0.7:
-            return -1.0
+            return 0.0
         else:
-            return -0.5
+            return 0.25
