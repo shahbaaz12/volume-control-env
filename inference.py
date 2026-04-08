@@ -8,7 +8,12 @@ try:
 except ImportError:  # Allows deterministic local fallback if OpenAI is unavailable.
     OpenAI = None
 
-from tasks.tasks import AvoidSpikesMedium, MaintainComfortEasy, StableListeningHard
+from tasks.tasks import (
+    EPSILON,
+    AvoidSpikesMedium,
+    MaintainComfortEasy,
+    StableListeningHard,
+)
 
 # ---------------------------
 # CONFIG (MANDATORY)
@@ -149,7 +154,7 @@ def choose_action(observation):
 # TASK SCORING
 # ---------------------------
 def compute_score(task, trajectory):
-    return max(0.0, min(1.0, float(task.grade(trajectory))))
+    return min(max(float(task.grade(trajectory)), EPSILON), 1.0 - EPSILON)
 
 
 # ---------------------------

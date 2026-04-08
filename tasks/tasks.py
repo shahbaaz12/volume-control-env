@@ -5,6 +5,13 @@ class BaseTask:
         raise NotImplementedError
 
 
+EPSILON = 0.001
+
+
+def strict_unit_interval(score):
+    return min(max(float(score), EPSILON), 1.0 - EPSILON)
+
+
 # ---------------------------
 # EASY
 # ---------------------------
@@ -16,14 +23,14 @@ class MaintainComfortEasy(BaseTask):
         total = len(trajectory)
 
         if total == 0:
-            return 0.0
+            return EPSILON
 
         for obs in trajectory:
             perceived = obs["current_volume"] * obs["current_loudness"]
             if 0.3 <= perceived <= 0.7:
                 good += 1
 
-        return good / total
+        return strict_unit_interval(good / total)
 
 
 # ---------------------------
@@ -37,7 +44,7 @@ class AvoidSpikesMedium(BaseTask):
         total = len(trajectory)
 
         if total == 0:
-            return 0.0
+            return EPSILON
 
         for obs in trajectory:
             perceived = obs["current_volume"] * obs["current_loudness"]
@@ -45,7 +52,7 @@ class AvoidSpikesMedium(BaseTask):
             if perceived > 0.8:
                 penalty += 1
 
-        return 1 - (penalty / total)
+        return strict_unit_interval(1 - (penalty / total))
 
 
 # ---------------------------
@@ -59,7 +66,7 @@ class StableListeningHard(BaseTask):
         total = len(trajectory)
 
         if total == 0:
-            return 0.0
+            return EPSILON
 
         prev_volume = None
 
@@ -75,4 +82,4 @@ class StableListeningHard(BaseTask):
 
             prev_volume = obs["current_volume"]
 
-        return min(score / total, 1.0)
+        return strict_unit_interval(score / total)
