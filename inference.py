@@ -14,8 +14,9 @@ from tasks.tasks import AvoidSpikesMedium, MaintainComfortEasy, StableListeningH
 # CONFIG (MANDATORY)
 # ---------------------------
 API_BASE_URL = os.getenv("API_BASE_URL")
-MODEL_NAME = os.getenv("MODEL_NAME", "rule-based-agent")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN = os.getenv("HF_TOKEN")
+API_KEY = HF_TOKEN or os.getenv("API_KEY")
 ENV_BASE_URL = os.getenv(
     "ENV_BASE_URL",
     os.getenv("OPENENV_BASE_URL", os.getenv("SPACE_URL", "http://localhost:8000")),
@@ -95,13 +96,13 @@ def get_llm_client():
     if _llm_disabled or _llm_client is not None:
         return _llm_client
 
-    if OpenAI is None or not API_BASE_URL or not HF_TOKEN or MODEL_NAME == "rule-based-agent":
+    if OpenAI is None or not API_BASE_URL or not API_KEY:
         _llm_disabled = True
         return None
 
     _llm_client = OpenAI(
         base_url=API_BASE_URL,
-        api_key=HF_TOKEN,
+        api_key=API_KEY,
         timeout=LLM_TIMEOUT_SECONDS,
     )
     return _llm_client
